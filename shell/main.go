@@ -48,25 +48,32 @@ type loopEvent struct {
 
 type executor struct{}
 
-// Execute handles one user message. It yields "task submitted", then one
-// terminal update carrying the loop's reply (or the reason it failed).
+// Execute handles one user message. It yields "task submitted", then the loop's
+// reply as an artifact and "completed"; or, if the loop failed, "failed" with
+// the reason.
 func (executor) Execute(ctx context.Context, request *a2asrv.ExecutorContext) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
 		if !yield(a2atype.NewSubmittedTask(request, request.Message), nil) {
 			return
 		}
-		state := a2atype.TaskStateCompleted
 		text, err := runLoop(ctx, turnInput{
 			ContextID: request.ContextID,
 			TaskID:    string(request.TaskID),
 			Text:      messageText(request.Message),
 		})
 		if err != nil {
-			state, text = a2atype.TaskStateFailed, err.Error()
+			message := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(err.Error()))
+			message.ContextID, message.TaskID = request.ContextID, request.TaskID
+			yield(a2atype.NewStatusUpdateEvent(request, a2atype.TaskStateFailed, message), nil)
+			return
 		}
-		message := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(text))
-		message.ContextID, message.TaskID = request.ContextID, request.TaskID
-		yield(a2atype.NewStatusUpdateEvent(request, state, message), nil)
+		// The reply goes out as an artifact, which is how kagent's own harness sends
+		// model text and what clients print. A message on the "completed" status is
+		// not shown by a2a-chat.
+		if !yield(a2atype.NewArtifactEvent(request, a2atype.NewTextPart(text)), nil) {
+			return
+		}
+		yield(a2atype.NewStatusUpdateEvent(request, a2atype.TaskStateCompleted, nil), nil)
 	}
 }
 
