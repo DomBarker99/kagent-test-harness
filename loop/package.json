@@ -1,0 +1,8 @@
+{
+  "name": "kagent-test-harness-loop",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^26.6.6"
+  }
+}
