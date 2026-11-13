@@ -15,6 +15,14 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # One job per image. Both come from the same Dockerfile; "target" picks the final stage.
+    strategy:
+      matrix:
+        include:
+          - target: alpine
+            suffix: ""
+          - target: debian
+            suffix: "-debian"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -27,13 +35,14 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: ${{ matrix.target }}
           platforms: linux/amd64
           provenance: false
           push: true
           tags: |
-            ${{ env.IMAGE }}:main
-            ${{ env.IMAGE }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Print the digest for harness.yaml
-        run: echo "${IMAGE}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+            ${{ env.IMAGE }}:main${{ matrix.suffix }}
+            ${{ env.IMAGE }}:${{ github.sha }}${{ matrix.suffix }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+      - name: Print the digest for the Harness
+        run: echo "${{ matrix.target }}  ${IMAGE}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
