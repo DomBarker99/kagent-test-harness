@@ -48,11 +48,42 @@ type loopEvent struct {
 
 type executor struct{}
 
+// contextLog is where record writes. /data is the one folder that survives a turn.
+const contextLog = "/data/executor-contexts.jsonl"
+
+// record appends the value that Execute or Cancel was handed to contextLog, one
+// JSON object on a line, so that it can be read back with `cat` in a later turn.
+// It is a probe: it changes nothing about how a turn runs, and a failure to
+// write is ignored.
+func record(call string, request *a2asrv.ExecutorContext) {
+	headers := map[string][]string{}
+	if request.ServiceParams != nil {
+		for name, values := range request.ServiceParams.List() {
+			headers[name] = values
+		}
+	}
+	line, err := json.Marshal(map[string]any{
+		"call": call, "Message": request.Message, "TaskID": request.TaskID, "ContextID": request.ContextID,
+		"StoredTask": request.StoredTask, "RelatedTasks": request.RelatedTasks, "Metadata": request.Metadata,
+		"ServiceParams": headers, "User": request.User, "Tenant": request.Tenant,
+	})
+	if err != nil {
+		return
+	}
+	file, err := os.OpenFile(contextLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	file.Write(append(line, '\n'))
+}
+
 // Execute handles one user message. It yields "task submitted", then the loop's
 // reply as an artifact and "completed"; or, if the loop failed, "failed" with
 // the reason.
 func (executor) Execute(ctx context.Context, request *a2asrv.ExecutorContext) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
+		record("Execute", request)
 		if !yield(a2atype.NewSubmittedTask(request, request.Message), nil) {
 			return
 		}
@@ -77,9 +108,11 @@ func (executor) Execute(ctx context.Context, request *a2asrv.ExecutorContext) it
 	}
 }
 
-// Cancel does nothing yet, as in kagent's fixture.
-func (executor) Cancel(context.Context, *a2asrv.ExecutorContext) iter.Seq2[a2atype.Event, error] {
-	return func(func(a2atype.Event, error) bool) {}
+// Cancel does nothing yet, as in kagent's fixture, except record what it was handed.
+func (executor) Cancel(_ context.Context, request *a2asrv.ExecutorContext) iter.Seq2[a2atype.Event, error] {
+	return func(func(a2atype.Event, error) bool) {
+		record("Cancel", request)
+	}
 }
 
 // runLoop runs the loop program for one turn and returns its final text.
@@ -170,4 +203,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
