@@ -78,19 +78,38 @@ func record(call string, request *a2asrv.ExecutorContext) {
 	file.Write(append(line, '\n'))
 }
 
+// askPrefix marks a message that pauses the task with a question instead of
+// running a command: "ask: Which version?" ends the turn in the state
+// input-required, with "Which version?" as the question. It is a probe, there
+// to see what a paused task looks like under kagent. The user's reply to the
+// question is then run as a command like any other message.
+const askPrefix = "ask:"
+
 // Execute handles one user message. It yields "task submitted", then the loop's
 // reply as an artifact and "completed"; or, if the loop failed, "failed" with
-// the reason.
+// the reason. A message that starts with askPrefix pauses the task instead.
 func (executor) Execute(ctx context.Context, request *a2asrv.ExecutorContext) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
 		record("Execute", request)
-		if !yield(a2atype.NewSubmittedTask(request, request.Message), nil) {
+		input := messageText(request.Message)
+		// StoredTask is set when the user is replying to a paused task. That task
+		// already exists, so it is not opened a second time.
+		reply := request.StoredTask != nil
+		if !reply {
+			if !yield(a2atype.NewSubmittedTask(request, request.Message), nil) {
+				return
+			}
+		}
+		if question, ok := strings.CutPrefix(input, askPrefix); ok && !reply {
+			message := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(strings.TrimSpace(question)))
+			message.ContextID, message.TaskID = request.ContextID, request.TaskID
+			yield(a2atype.NewStatusUpdateEvent(request, a2atype.TaskStateInputRequired, message), nil)
 			return
 		}
 		text, err := runLoop(ctx, turnInput{
 			ContextID: request.ContextID,
 			TaskID:    string(request.TaskID),
-			Text:      messageText(request.Message),
+			Text:      input,
 		})
 		if err != nil {
 			message := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(err.Error()))
